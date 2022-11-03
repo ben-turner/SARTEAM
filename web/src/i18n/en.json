@@ -1,0 +1,27 @@
+{
+  "generic": {
+    "next": "Next",
+    "required": "Required.",
+    "invalid-date": "Invalid Date."
+  },
+  "home": {
+    "welcome": "Welcome to SARTEAM.",
+    "cta": "Click one of the options below to get started.",
+    "new-incident": "Create a New Incident",
+    "open-incident": "Open Existing Incident"
+  },
+  "wizard": {
+    "details": {
+      "title": "Incident Details",
+      "incident-location": "Incident Location",
+      "incident-location-hint": "Eg. East Sooke Park, Magdalena Point.",
+      "start-date": "Incident Start Date",
+      "start-date-hint": "Use format YYYY-MM-DD.",
+      "incident-case-number": "Case Number",
+      "incident-case-number-hint": "Optional. Can be changed later.",
+      "training": "Training Incident",
+      "no-case-number": "No case number for training incidents. If this were a real incident, you would enter the case number here.",
+      "failed": "Failed to create the incident. You may want to try again or use SARTopo directly without SARTeam."
+    }
+  }
+}
