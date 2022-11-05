@@ -6,7 +6,7 @@ import (
 
 	"github.com/ben-turner/sarteam/internal/models"
 	"github.com/ben-turner/sarteam/internal/radiotracker"
-	"github.com/gorilla/websocket"
+	"golang.org/x/net/websocket"
 )
 
 type SARTeam struct {

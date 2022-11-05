@@ -71,7 +71,7 @@ type Incident struct {
 	f *os.File
 
 	// A channel to send updates to.
-	updates chan *updateRequest
+	updates chan *mutation
 
 	// The date of the incident.
 	Date string `json:"date"`
@@ -217,7 +217,7 @@ func (i *Incident) reload() error {
 //
 // If allowReloads is false, any reload commands are ignored. This is to avoid
 // infinite loops when a file contains a reload command.
-func (i *Incident) update(update []string, allowReloads bool) error {
+func (i *Incident) update(update []string, msg ) error {
 	switch update[0] {
 	case "SET":
 		return i.set(update[1], update[2])
@@ -231,6 +231,8 @@ func (i *Incident) update(update []string, allowReloads bool) error {
 		if allowReloads {
 			return i.reload()
 		}
+	case "READ":
+
 	default:
 		return fmt.Errorf("unknown update %s", update[0])
 	}
@@ -263,7 +265,7 @@ func (i *Incident) processUpdates() {
 // Update applies a mutation string to the incident.
 func (i *Incident) Update(update string) error {
 	result := make(chan error)
-	i.updates <- &updateRequest{
+	i.updates <- &mutation{
 		update:    update,
 		result:    result,
 		timestamp: time.Now(),
@@ -275,7 +277,7 @@ func (i *Incident) Update(update string) error {
 // Reload reloads the incident from the file.
 func (i *Incident) Reload() error {
 	result := make(chan error)
-	i.updates <- &updateRequest{
+	i.updates <- &mutation{
 		update:    "RELOAD",
 		result:    result,
 		timestamp: time.Now(),

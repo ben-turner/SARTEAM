@@ -14,11 +14,14 @@ var (
 
 // SARTeam is the root model for the application.
 type SARTeam struct {
+	// A channel of mutations to be applied.
+	updates chan *mutation
+
 	// A map of filepaths to incidents.
 	incidents map[string]*Incident
 
 	// The currently active incident.
-	activeIncident *Incident
+	activeIncident string
 
 	// The currently loaded configuration.
 	Config *Config
@@ -68,7 +71,7 @@ func (s *SARTeam) OpenIncident(details *IncidentDetails) (*Incident, error) {
 
 	incident = &Incident{
 		f:       file,
-		updates: make(chan *updateRequest),
+		updates: make(chan *mutation),
 		Teams:   make([]*Team, 0),
 	}
 
@@ -84,9 +87,65 @@ func (s *SARTeam) OpenIncident(details *IncidentDetails) (*Incident, error) {
 	return incident, nil
 }
 
+func (s *SARTeam) applyMutation(mut *mutation) error {
+	cmd := mut.command[0]
+	switch cmd {
+	case "SET":
+		mut.command = mut.command[1:]
+		s.set(mut)
+	case "INCIDENT":
+		id := mut.command[1]
+		if id == "active" {
+			id = s.activeIncident
+		}
+
+		incident, ok := s.incidents[id]
+		if !ok {
+			return ErrIncidentNotFound
+		}
+
+		mut.command = mut.command[2:]
+		incident.applyMutation(mut)
+	}
+
+}
+
+func (s *SARTeam) processUpdates() {
+	for mutation := range s.updates {
+		cmd := mutation.command[0]
+		switch cmd {
+		case "SET":
+			mutation.command = mutation.command[1:]
+			s.set(mutation)
+		case "INCIDENT":
+			id := mutation.command[1]
+			if id == "active" {
+				id = s.activeIncident
+			}
+
+			incident, ok := s.incidents[id]
+			if !ok {
+				mutation.Err(ErrIncidentNotFound)
+				continue
+			}
+
+			mutation.command = mutation.command[2:]
+			incident.applyMutation(mutation)
+		}
+	}
+}
+
+func (s *SARTeam) ApplyMutation(mutation *mutation) {
+	s.updates <- mutation
+}
+
 func NewRoot(config *Config) *SARTeam {
-	return &SARTeam{
+	s := &SARTeam{
 		incidents: make(map[string]*Incident),
 		Config:    config,
 	}
+
+	go s.processUpdates()
+
+	return s
 }
