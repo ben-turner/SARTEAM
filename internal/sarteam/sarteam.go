@@ -4,77 +4,52 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/ben-turner/sarteam/internal/models"
-	"github.com/ben-turner/sarteam/internal/radiotracker"
-	"golang.org/x/net/websocket"
+	"github.com/ben-turner/sarteam/mutationapi"
+	"github.com/gorilla/websocket"
 )
 
 type SARTeam struct {
-	RootModel *models.SARTeam
+	*http.ServeMux
 
-	conns []*Conn
+	config *Config
 
-	Context      context.Context
-	Cancel       context.CancelFunc
-	RadioTracker *radiotracker.RadioTracker
+	ctx context.Context
+
+	conns     mutationapi.ConnSet
+	mutations chan *mutationapi.Mutation
 }
 
-func (s *SARTeam) handleRadioTracks() {
-	for {
-		select {
-		case msg := <-s.RadioTracker.Messages():
-			incident := s.RootModel.ActiveIncident
-			if incident == nil {
-				continue
-			}
-
-			for _, team := range incident.Teams {
-				if team.State != models.AssetStateActive || !team.HasRadio(msg.RadioID) {
-					continue
-				}
-
-				point := &models.Point{
-					Latitude:  msg.Latitude,
-					Longitude: msg.Longitude,
-					Time:      msg.Timestamp,
-				}
-				team.RadioTracks[msg.RadioID].AddPoint(point)
-			}
-
-		case <-s.Context.Done():
-			return
-		}
-	}
+func (s *SARTeam) conn(conn mutationapi.Conn) {
+	s.conns.Add(conn)
+	go mutationapi.Pipe(s.ctx, conn, s.mutations)
 }
 
-func (s *SARTeam) handleWS(ws *websocket.Conn) {
-	conn := &Conn{
-		ws: ws,
+func (s *SARTeam) ListenAndServe() error {
+	return http.ListenAndServe(s.config.ListenAddr, s)
+}
+
+func New(config *Config) *SARTeam {
+	s := &SARTeam{
+		ServeMux: http.NewServeMux(),
+
+		config: config,
+
+		ctx: context.Background(),
+
+		conns:     mutationapi.NewConnSet(),
+		mutations: make(chan *mutationapi.Mutation, config.ConnectionBufferSize),
 	}
 
-	s.conns = append(s.conns, conn)
-	conn.Start(s)
-}
+	wsHandler := &mutationapi.WebsocketHandler{
+		Handler:  mutationapi.ConnHandlerFunc(s.conn),
+		Upgrader: websocket.Upgrader{},
 
-// Run starts the SARTeam application.
-func (s *SARTeam) Run() error {
-	go s.handleRadioTracks()
-
-	router := http.NewServeMux()
-	router.Handle("/ws", websocket.Handler(s.handleWS))
-	router.Handle("/", http.FileServer(http.Dir(s.RootModel.Config.Paths.Web)))
-
-	return http.ListenAndServe(s.RootModel.Config.ListenAddress, router)
-}
-
-func New(config *models.Config) *SARTeam {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	return &SARTeam{
-		RootModel: models.NewRoot(config),
-
-		Context:      ctx,
-		Cancel:       cancel,
-		RadioTracker: radiotracker.New(ctx),
+		PingInterval: config.PingInterval,
+		Timeout:      config.ConnectionTimeout,
 	}
+
+	s.Handle("/ws", wsHandler)
+	s.Handle("/", http.FileServer(http.Dir(config.WebDir)))
+
+	return s
 }

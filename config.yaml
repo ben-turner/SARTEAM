@@ -1,5 +1,6 @@
 radioPort: COM5
 radioBaud: 9600
 webRoot: web/dist
-workdir: ./workdir/
-listenAddress: ":8780"
+listenAddr: "localhost:8780"
+pingInterval: 5s
+connectionTimeout: 30s

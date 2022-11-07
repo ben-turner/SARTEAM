@@ -3,7 +3,6 @@ package main
 import (
 	"github.com/spf13/viper"
 
-	"github.com/ben-turner/sarteam/internal/models"
 	"github.com/ben-turner/sarteam/internal/sarteam"
 )
 
@@ -19,10 +18,15 @@ func main() {
 		panic(err)
 	}
 
-	config := &models.Config{}
+	config := &sarteam.Config{}
 	if err := viper.Unmarshal(config); err != nil {
 		panic(err)
 	}
 
-	sarteam.New(config).Run()
+	s := sarteam.New(config)
+
+	err := s.ListenAndServe()
+	if err != nil {
+		panic(err)
+	}
 }
