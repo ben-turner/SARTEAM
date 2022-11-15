@@ -13,9 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout
+        uses: actions/checkout@v3
       - name: Install Go
-        uses: actions/setup-go
+        uses: actions/setup-go@v3
         with:
           go-version: ${{ matrix.go-version }}
           check-latest: true
