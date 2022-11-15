@@ -2,8 +2,14 @@ package models
 
 import (
 	"errors"
+	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"path/filepath"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 var (
@@ -14,8 +20,21 @@ var (
 
 // SARTeam is the root model for the application.
 type SARTeam struct {
+	mux *http.ServeMux
+
+	// A slice of all open connections.
+	conns []*Conn
+
+	netstatus       bool
+	netstatusTicker *time.Ticker
+
+	upgrader *websocket.Upgrader
+
+	// A channel for new connections.
+	ws chan *websocket.Conn
+
 	// A channel of mutations to be applied.
-	updates chan *mutation
+	mutations chan *mutation
 
 	// A map of filepaths to incidents.
 	incidents map[string]*Incident
@@ -87,65 +106,138 @@ func (s *SARTeam) OpenIncident(details *IncidentDetails) (*Incident, error) {
 	return incident, nil
 }
 
+func (s *SARTeam) get(mut *mutation) error {
+	t := mut.Pop(1)
+	if len(t) != 1 {
+		return ErrInvalidCommand
+	}
+
+	switch t[0] {
+	case "NETSTATUS":
+		mut.Reply(fmt.Sprintf("SET NETSTATUS %t", s.netstatus))
+
+	default:
+		return ErrInvalidCommand
+	}
+
+	return nil
+}
+
+func (s *SARTeam) set(mut *mutation) error {
+	switch mut.command[0] {
+	case "active":
+		oldIncident := s.activeIncident
+		s.activeIncident = mut.command[1]
+		mut.undoFuncs = append(mut.undoFuncs, func() {
+			s.activeIncident = oldIncident
+		})
+	default:
+		return ErrInvalidCommand
+	}
+
+	return nil
+}
+
+func (s *SARTeam) incident(mut *mutation) error {
+	idRes := mut.Pop(1)
+
+	if len(idRes) != 1 {
+		return ErrInvalidCommand
+	}
+
+	id := idRes[0]
+
+	if id == "active" {
+		id = s.activeIncident
+	}
+
+	incident, ok := s.incidents[id]
+	if !ok {
+		return ErrIncidentNotFound
+	}
+
+	return incident.applyMutation(mut)
+}
+
 func (s *SARTeam) applyMutation(mut *mutation) error {
-	cmd := mut.command[0]
-	switch cmd {
+	cmd := mut.Pop(1)
+	if len(cmd) != 1 {
+		return ErrInvalidCommand
+	}
+
+	switch cmd[0] {
+	case "GET":
+		return s.get(mut)
 	case "SET":
-		mut.command = mut.command[1:]
-		s.set(mut)
+		return s.set(mut)
 	case "INCIDENT":
-		id := mut.command[1]
-		if id == "active" {
-			id = s.activeIncident
-		}
-
-		incident, ok := s.incidents[id]
-		if !ok {
-			return ErrIncidentNotFound
-		}
-
-		mut.command = mut.command[2:]
-		incident.applyMutation(mut)
+		return s.incident(mut)
 	}
 
+	return ErrInvalidCommand
 }
 
-func (s *SARTeam) processUpdates() {
-	for mutation := range s.updates {
-		cmd := mutation.command[0]
-		switch cmd {
-		case "SET":
-			mutation.command = mutation.command[1:]
-			s.set(mutation)
-		case "INCIDENT":
-			id := mutation.command[1]
-			if id == "active" {
-				id = s.activeIncident
+func (s *SARTeam) start() {
+	for {
+		select {
+		case ws := <-s.ws:
+			log.Printf("Connection accepted")
+
+			conn := &Conn{
+				ws:        ws,
+				sarteam:   s,
+				messageID: 0,
 			}
 
-			incident, ok := s.incidents[id]
-			if !ok {
-				mutation.Err(ErrIncidentNotFound)
-				continue
+			go conn.Start()
+
+			s.conns = append(s.conns, conn)
+		case mut := <-s.mutations:
+			err := s.applyMutation(mut)
+			if err != nil {
+				mut.Error(err)
 			}
 
-			mutation.command = mutation.command[2:]
-			incident.applyMutation(mutation)
+		case <-s.netstatusTicker.C:
+			if InternetAvailable() {
+				s.mutations <- &mutation{command: []string{"SET", "NETSTATUS", "true"}, timestamp: time.Now()}
+			} else {
+				s.mutations <- &mutation{command: []string{"SET", "NETSTATUS", "false"}, timestamp: time.Now()}
+			}
 		}
 	}
 }
 
-func (s *SARTeam) ApplyMutation(mutation *mutation) {
-	s.updates <- mutation
+func (s *SARTeam) ListenAndServe() error {
+	log.Println("Listening on", s.Config.ListenAddress)
+	return http.ListenAndServe(s.Config.ListenAddress, s.mux)
 }
 
-func NewRoot(config *Config) *SARTeam {
+func (s *SARTeam) UpgradeRequest(w http.ResponseWriter, r *http.Request) {
+	conn, err := s.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println("Failed to upgrade connection:", err)
+		return
+	}
+
+	s.ws <- conn
+}
+
+func NewRoot(config *Config) (*SARTeam, error) {
 	s := &SARTeam{
-		incidents: make(map[string]*Incident),
-		Config:    config,
+		mux:             http.NewServeMux(),
+		upgrader:        &websocket.Upgrader{},
+		netstatusTicker: time.NewTicker(5 * time.Second),
+		ws:              make(chan *websocket.Conn, 16),
+		mutations:       make(chan *mutation, 16),
+		incidents:       make(map[string]*Incident),
+		Config:          config,
 	}
 
-	go s.processUpdates()
+	s.mux.HandleFunc("/ws", s.UpgradeRequest)
+	s.mux.Handle("/", http.FileServer(http.Dir(config.Paths.Web)))
 
-	return s
+	go s.start()
+
+	return s, nil
 }

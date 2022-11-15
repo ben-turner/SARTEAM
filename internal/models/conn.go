@@ -1,9 +1,9 @@
 package models
 
 import (
-	"bufio"
+	"log"
 
-	"golang.org/x/net/websocket"
+	"github.com/gorilla/websocket"
 )
 
 type Conn struct {
@@ -13,14 +13,26 @@ type Conn struct {
 }
 
 func (c *Conn) Send(msg string) error {
-	_, err := c.ws.Write([]byte(msg))
-	return err
+	if c.ws == nil {
+		return nil
+	}
+	return c.ws.WriteMessage(websocket.TextMessage, []byte(msg))
 }
 
 func (c *Conn) Start() {
-	scanner := bufio.NewScanner(c.ws)
-	for scanner.Scan() {
-		mutation := newMutation(scanner.Text(), c)
-		c.sarteam.ApplyMutation(mutation)
+	log.Printf("Starting conn")
+
+	for {
+		_, raw, err := c.ws.ReadMessage()
+		if err != nil {
+			log.Printf("Error reading message: %s", err)
+			return
+		}
+
+		log.Printf("%s", raw)
+
+		mutation := mutationFromString(string(raw), c)
+		log.Printf("%+v", mutation)
+		c.sarteam.mutations <- mutation
 	}
 }

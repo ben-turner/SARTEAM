@@ -1,7 +1,6 @@
 package mutationapi
 
 import (
-	"bytes"
 	"encoding/json"
 	"strings"
 	"time"
@@ -57,6 +56,7 @@ func (m MutationAction) String() string {
 	return "UNKNOWN"
 }
 
+// ParseMutationAction parses a string into a mutation action.
 func ParseMutationAction(action string) MutationAction {
 	switch action {
 	case "CREATE":
@@ -72,6 +72,7 @@ func ParseMutationAction(action string) MutationAction {
 	return MutationActionUnknown
 }
 
+// Mutation is a modification of some state.
 type Mutation struct {
 	// ID is a client-provided identifier that can be used to correlate responses.
 	ID MutationID
@@ -118,22 +119,18 @@ func (m *Mutation) BodyAsBool() bool {
 
 // Error marks the mutation as failed and sends the error message to the client.
 func (m *Mutation) Error(err error) {
-	m.Conn.sendError(err)
+	m.Conn.sendError(m.ID, err)
 }
 
 // String returns a string representation of the mutation.
 func (m *Mutation) String() string {
-	parts := make([]string, 4, 5)
-	parts[0] = m.Timestamp.UTC().Format(time.RFC3339)
-	parts[1] = string(m.ID)
-	parts[2] = m.Action.String()
-	parts[3] = strings.Join(m.Path, "/")
-
-	if len(m.body) > 0 {
-		parts = append(parts, string(m.body))
-	}
-
-	return strings.Join(parts, " ")
+	return strings.Join([]string{
+		m.Timestamp.Format(time.RFC3339),
+		string(m.ID),
+		m.Action.String(),
+		strings.Join(m.Path, "/"),
+		m.BodyAsString(),
+	}, " ")
 }
 
 func invertID(id MutationID) MutationID {
@@ -156,7 +153,7 @@ func (m *Mutation) Inverse() *Mutation {
 	case MutationActionCreate:
 		return &Mutation{
 			ID:           invertID(m.ID),
-			Timestamp:    timeNow(),
+			Timestamp:    time.Now(),
 			Conn:         m.Conn,
 			Action:       MutationActionDelete,
 			Path:         m.Path,
@@ -165,7 +162,7 @@ func (m *Mutation) Inverse() *Mutation {
 	case MutationActionUpdate:
 		return &Mutation{
 			ID:           invertID(m.ID),
-			Timestamp:    timeNow(),
+			Timestamp:    time.Now(),
 			Conn:         m.Conn,
 			Action:       MutationActionUpdate,
 			Path:         m.Path,
@@ -175,7 +172,7 @@ func (m *Mutation) Inverse() *Mutation {
 	case MutationActionDelete:
 		return &Mutation{
 			ID:        invertID(m.ID),
-			Timestamp: timeNow(),
+			Timestamp: time.Now(),
 			Conn:      m.Conn,
 			Action:    MutationActionCreate,
 			Path:      m.Path,
@@ -186,72 +183,30 @@ func (m *Mutation) Inverse() *Mutation {
 	return nil
 }
 
-// Equivalent returns true if the two mutations are equivalent, but not
-// necessarily identical.
-//
-// Equivalent mutations are mutations that would have the same effect if
-// applied. For example, two mutations that update the same path with the same
-// value are equivalent. It does not evaluate the original body of the mutation
-// or the mutation ID. This means that the inverse of two equivalent mutations
-// are not necessarily equivalent.
-func (m *Mutation) Equivalent(other *Mutation) bool {
-	if other == nil {
-		return false
-	}
-
-	if m.Action != other.Action {
-		return false
-	}
-
-	if len(m.Path) != len(other.Path) {
-		return false
-	}
-
-	for i, p := range m.Path {
-		if p != other.Path[i] {
-			return false
-		}
-	}
-
-	return bytes.Equal(m.body, other.body)
-}
-
-// Equal returns true if the two mutations are identical.
-func (m *Mutation) Equal(other *Mutation) bool {
-	return m.Equivalent(other) &&
-		m.ID == other.ID &&
-		bytes.Equal(m.OriginalBody, other.OriginalBody) &&
-		m.Timestamp.Equal(other.Timestamp) &&
-		m.Conn == other.Conn
-}
-
 // ParseMutation parses a mutation from a string.
 //
 // The string should be in the following format:
 // [timestamp] <id> <action> <path> [body]
-func ParseMutation(msg string, conn Conn) (*Mutation, error) {
+func ParseMutation(msg string, conn Conn) *Mutation {
 	split := strings.Split(msg, " ")
-	if len(split) < 3 { // must have at least id, action and path
-		return nil, &ErrMutationFailed{Msg: "invalid mutation"}
+	if len(split) < 2 { // must have at least action and path
+		return nil
 	}
 
 	timestamp, err := time.Parse(time.RFC3339, split[0])
 	if err != nil {
-		timestamp = timeNow()
+		timestamp = time.Now()
 	} else {
 		split = split[1:]
 	}
 
 	id := MutationID(split[0])
 
-	action := ParseMutationAction(split[1])
+	action := ParseMutationAction(split[0])
 
-	path := strings.Split(split[2], "/")
+	path := strings.Split(split[1], "/")
 
-	var body []byte
-	if len(split) > 3 {
-		body = []byte(strings.Join(split[3:], " "))
-	}
+	body := []byte(strings.Join(split[2:], " "))
 
 	return &Mutation{
 		ID:        id,
@@ -260,5 +215,5 @@ func ParseMutation(msg string, conn Conn) (*Mutation, error) {
 		Action:    action,
 		Path:      path,
 		body:      body,
-	}, nil
+	}
 }

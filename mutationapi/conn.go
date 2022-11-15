@@ -25,9 +25,13 @@ type Conn interface {
 	// IsClosed returns true if the connection is closed.
 	IsClosed() bool
 
+	// String returns a string representation of the mutation. This should be a
+	// human-readable representation of the mutation.
+	String() string
+
 	// sendError sends an error to the connection. Different connection types may
 	// handle errors differently.
-	sendError(MutationID, error)
+	sendError(error)
 }
 
 // ConnHandlerFunc is a function that accepts new Conn objects from a Conn

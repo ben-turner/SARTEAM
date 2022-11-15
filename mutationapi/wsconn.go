@@ -3,6 +3,7 @@ package mutationapi
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -16,10 +17,20 @@ type wsMessage struct {
 	result chan error
 }
 
+// websocketConn is an interface for a websocket connection. It is used to
+// abstract the websocket connection for testing.
+type websocketConn interface {
+	ReadMessage() (int, []byte, error)
+	WriteMessage(int, []byte) error
+	WriteControl(int, []byte, time.Time) error
+	Close() error
+	RemoteAddr() net.Addr
+}
+
 // wsConn is a websocket connection. It maintains the websocket connection, and
 // handles reading and writing mutations.
 type wsConn struct {
-	ws *websocket.Conn
+	ws websocketConn
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -55,7 +66,7 @@ func (c *wsConn) read() {
 // thread-safe and should only be called from the write() goroutine.
 func (c *wsConn) writeUnsafe(msg *wsMessage) error {
 	if c.ws == nil {
-		return ErrClosed
+		return &ErrClosed{nil, c}
 	}
 
 	switch msg.t {
@@ -65,7 +76,10 @@ func (c *wsConn) writeUnsafe(msg *wsMessage) error {
 		return c.ws.WriteControl(msg.t, msg.p, time.Now().Add(10*time.Second))
 	}
 
-	return ErrInvalidArgument
+	return &ErrCommunicationFailed{
+		Conn: c,
+		Msg:  fmt.Sprintf("unknown message type %d", msg.t),
+	}
 }
 
 // write is a goroutine that sends messages from the sendMessages channel to the
@@ -97,7 +111,11 @@ func (c *wsConn) work() {
 			c.closedTimer.Stop()
 			c.closedTimer.Reset(c.closedTimeout)
 			if msg.t == websocket.TextMessage {
-				mut := ParseMutation(string(msg.p), c)
+				mut, err := ParseMutation(string(msg.p), c)
+				if err != nil {
+					c.sendError(err)
+					continue
+				}
 				c.mutations <- mut
 			}
 		}
@@ -122,7 +140,7 @@ func (c *wsConn) Send(mut *Mutation) error {
 func (c *wsConn) Receive() (*Mutation, error) {
 	select {
 	case <-c.ctx.Done():
-		return nil, c.ctx.Err()
+		return nil, &ErrClosed{c.ctx.Err(), c}
 	case mut := <-c.mutations:
 		return mut, nil
 	}
@@ -141,10 +159,21 @@ func (c *wsConn) IsClosed() bool {
 	return c.ws == nil
 }
 
+// String returns the IP address of the websocket connection.
+func (c *wsConn) String() string {
+	return c.ws.RemoteAddr().String()
+}
+
 // sendError sends an error to the websocket with the mutation ID that caused
 // the error. If the connection is closed, sendError will fail silently.
-func (c *wsConn) sendError(originator MutationID, err error) {
-	msg := fmt.Sprintf("%s ERROR %s", originator, err)
+func (c *wsConn) sendError(err error) {
+	var msg string
+	mutErr, ok := err.(*ErrMutationFailed)
+	if !ok {
+		msg = "ERROR " + err.Error()
+	} else {
+		msg = fmt.Sprintf("%s ERROR %s", mutErr.Mut.ID, mutErr.Error())
+	}
 	c.ws.WriteMessage(websocket.TextMessage, []byte(msg))
 }
 
@@ -176,8 +205,10 @@ type WebsocketHandler struct {
 func (h *WebsocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ws, err := h.Upgrader.Upgrade(w, r, h.ResponseHeader)
 	if err != nil {
-		// TODO: Handle this... somehow
-		return
+		errorLogger(&ErrCommunicationFailed{
+			Err: err,
+			Msg: "failed to upgrade http request to websocket",
+		})
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

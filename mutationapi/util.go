@@ -1,10 +1,30 @@
 package mutationapi
 
-import "context"
+import (
+	"context"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// allows the time package to be mocked for testing
+var timeNow = time.Now
+
+// generateMutationID generates a unique ID for a mutation. This is currently a
+// UUID but this may change in the future if file sizes become too large.
+//
+// This is a var in order to allow tests to mock this function.
+var generateMutationID = func() MutationID {
+	return MutationID(uuid.New().String())
+}
 
 // Pipe receives mutations from a *Conn and sends them to a channel until the
 // *Conn is closed or the provided context is done. This is a blocking function.
+// If the context is done or the *Conn returns an error, this will close the
+// mutations channel.
 func Pipe(ctx context.Context, conn Conn, mutations chan<- *Mutation) error {
+	defer close(mutations)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -18,38 +38,4 @@ func Pipe(ctx context.Context, conn Conn, mutations chan<- *Mutation) error {
 			mutations <- mutation
 		}
 	}
-}
-
-// ConnSet is a set of connections.
-type ConnSet map[Conn]struct{}
-
-// Add adds a connection to the set.
-func (s ConnSet) Add(conn Conn) {
-	s[conn] = struct{}{}
-}
-
-// Remove removes a connection from the set.
-func (s ConnSet) Remove(conn Conn) {
-	delete(s, conn)
-}
-
-// Broadcast sends a mutation to all connections in the set.
-func (s ConnSet) Broadcast(mutation *Mutation) {
-	for conn := range s {
-		conn.Send(mutation)
-	}
-}
-
-// Purge removes all closed connections from the set.
-func (s ConnSet) Purge() {
-	for conn := range s {
-		if conn.IsClosed() {
-			s.Remove(conn)
-		}
-	}
-}
-
-// NewConnSet creates a new empty connection set.
-func NewConnSet() ConnSet {
-	return make(map[Conn]struct{})
 }

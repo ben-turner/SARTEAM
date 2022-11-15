@@ -52,7 +52,7 @@ func (r *filterRule) match(path []string) filterStatus {
 // Returns ErrInvalidFilterRule for empty or invalid rules.
 func parseFilterRule(rule string) (*filterRule, error) {
 	if len(rule) == 0 {
-		return nil, ErrInvalidFilterRule
+		return nil, &ErrInvalidFilterRule{rule}
 	}
 
 	inverted := false
@@ -62,7 +62,7 @@ func parseFilterRule(rule string) (*filterRule, error) {
 	}
 
 	if len(rule) == 0 {
-		return nil, ErrInvalidFilterRule
+		return nil, &ErrInvalidFilterRule{rule}
 	}
 
 	return &filterRule{
@@ -125,8 +125,9 @@ func (c *filterConn) Send(mutation *Mutation) error {
 // /foo/bar.
 func NewFilterConn(conn Conn, ruleStrings []string) (Conn, error) {
 	rules := make([]*filterRule, len(ruleStrings))
+
+	var err error
 	for i, path := range ruleStrings {
-		var err error
 		rules[i], err = parseFilterRule(path)
 		if err != nil {
 			return nil, err

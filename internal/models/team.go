@@ -39,6 +39,6 @@ func (t *Team) HasRadio(radioID string) bool {
 	return false
 }
 
-func (t *Team) update(args []string) error {
+func (t *Team) applyMutation(mut *mutation) error {
 	return nil
 }

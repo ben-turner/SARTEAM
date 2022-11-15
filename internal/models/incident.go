@@ -29,10 +29,15 @@ func (details *IncidentDetails) Name() string {
 	return fmt.Sprint("%s %s", details.Date, details.Location)
 }
 
+// Filename returns the filename of the incident.
+//
+// This is the same as the incident's name, but with unsafe characters escaped,
+// and the file extension appended.
 func (details *IncidentDetails) Filename() string {
 	return url.PathEscape(details.Name()) + IncidentFileExtension
 }
 
+// IncidentDetailsFromName parses the given human-readable name and returns the incident details.
 func IncidentDetailsFromName(name string) (*IncidentDetails, error) {
 	split := strings.Split(name, " ")
 	trg := split[0] == "Training"
@@ -52,6 +57,7 @@ func IncidentDetailsFromName(name string) (*IncidentDetails, error) {
 	}, nil
 }
 
+// IncidentDetailsFromFilename parses the given filename and returns the incident details.
 func IncidentDetailsFromFilename(filename string) (*IncidentDetails, error) {
 	if !strings.HasSuffix(filename, IncidentFileExtension) {
 		return nil, fmt.Errorf("invalid file extension")
@@ -99,33 +105,68 @@ type Incident struct {
 }
 
 // set updates the value of the given field.
-func (i *Incident) set(field, value string) error {
+func (i *Incident) set(mut *mutation) error {
+	opts := mut.Pop(2)
+	if len(opts) != 2 {
+		return ErrInvalidCommand
+	}
+
+	field := opts[0]
+	value := opts[1]
+
 	switch field {
 	case "date":
+		oldVal := i.Date
 		i.Date = value
+		mut.undoFuncs = append(mut.undoFuncs, func() {
+			i.Date = oldVal
+		})
 	case "location":
+		oldVal := i.Location
 		i.Location = value
+		mut.undoFuncs = append(mut.undoFuncs, func() {
+			i.Location = oldVal
+		})
 	case "training":
+		oldVal := i.Training
 		i.Training = value == "true"
+		mut.undoFuncs = append(mut.undoFuncs, func() {
+			i.Training = oldVal
+		})
 	case "caseNumber":
+		oldVal := i.CaseNumber
 		i.CaseNumber = value
+		mut.undoFuncs = append(mut.undoFuncs, func() {
+			i.CaseNumber = oldVal
+		})
 	case "description":
+		oldVal := i.Description
 		i.Description = value
+		mut.undoFuncs = append(mut.undoFuncs, func() {
+			i.Description = oldVal
+		})
 	case "createdAt":
 		if !i.CreatedAt.IsZero() {
-			return fmt.Errorf("createdAt already set")
+			return ErrPermissionDenied
 		}
 		t, err := time.Parse(time.RFC3339, value)
 		if err != nil {
 			return err
 		}
 		i.CreatedAt = t
+		mut.undoFuncs = append(mut.undoFuncs, func() {
+			i.CreatedAt = time.Time{}
+		})
 	case "map":
+		oldVal := i.Map
 		m, err := NewMap(value)
 		if err != nil {
 			return err
 		}
 		i.Map = m
+		mut.undoFuncs = append(mut.undoFuncs, func() {
+			i.Map = oldVal
+		})
 	default:
 		return fmt.Errorf("unknown field %s", field)
 	}
@@ -134,19 +175,35 @@ func (i *Incident) set(field, value string) error {
 }
 
 // add creates a new sub-resource and adds it to the incident.
-func (i *Incident) add(t, id string) error {
+func (i *Incident) add(mut *mutation) error {
+	opts := mut.Pop(2)
+	if len(opts) != 2 {
+		return ErrInvalidCommand
+	}
+
+	t := opts[0]
+	id := opts[1]
+
 	switch t {
 	case "team":
 		i.Teams = append(i.Teams, &Team{ID: id})
 	default:
-		return fmt.Errorf("unknown type %s", t)
+		return ErrInvalidCommand
 	}
 
 	return nil
 }
 
 // del removes the sub-resource with the given ID.
-func (i *Incident) del(t, id string) error {
+func (i *Incident) del(mut *mutation) error {
+	opts := mut.Pop(2)
+	if len(opts) != 2 {
+		return ErrInvalidCommand
+	}
+
+	t := opts[0]
+	id := opts[1]
+
 	switch t {
 	case "team":
 		for idx, team := range i.Teams {
@@ -162,24 +219,27 @@ func (i *Incident) del(t, id string) error {
 }
 
 // updateSub updates the given sub-resource.
-func (i *Incident) updateSub(t, id string, update []string) error {
-	switch t {
-	case "team":
-		for _, team := range i.Teams {
-			if team.ID == id {
-				team.update(update)
-				return nil
-			}
-		}
-		return fmt.Errorf("team %s not found", id)
-	default:
-		return fmt.Errorf("unknown type %s", t)
+func (i *Incident) team(mut *mutation) error {
+	idRes := mut.Pop(1)
+	if len(idRes) != 1 {
+		return ErrInvalidCommand
 	}
+
+	id := idRes[0]
+
+	for _, team := range i.Teams {
+		if team.ID == id {
+			team.applyMutation(mut)
+			return nil
+		}
+	}
+
+	return ErrTeamNotFound
 }
 
-// clear clears the incident of all data.
+// clear resets the incident to its default state.
+// This is generally used prior to loading an incident from disk.
 func (i *Incident) clear() {
-	// TODO: Lock reads/writes to the incident.
 	i.Date = ""
 	i.Location = ""
 	i.Training = false
@@ -197,14 +257,10 @@ func (i *Incident) reload() error {
 	scanner := bufio.NewScanner(i.f)
 	for scanner.Scan() {
 		line := scanner.Text()
-		splitLine := strings.Split(line, " ")
 
-		_, err := time.Parse(time.RFC3339, splitLine[0])
-		if err != nil {
-			return err
-		}
+		mut := mutationFromString(line, nil)
 
-		err = i.update(splitLine[1:], false)
+		err := i.applyMutation(mut)
 		if err != nil {
 			return err
 		}
@@ -217,24 +273,26 @@ func (i *Incident) reload() error {
 //
 // If allowReloads is false, any reload commands are ignored. This is to avoid
 // infinite loops when a file contains a reload command.
-func (i *Incident) update(update []string, msg ) error {
-	switch update[0] {
+func (i *Incident) applyMutation(mut *mutation) error {
+	cmd := mut.Pop(1)[0]
+
+	switch cmd {
 	case "SET":
-		return i.set(update[1], update[2])
+		return i.set(mut)
 	case "ADD":
-		return i.add(update[1], update[2])
+		return i.add(mut)
 	case "DEL":
-		return i.del(update[1], update[2])
-	case "UPDATE":
-		return i.updateSub(update[1], update[2], update[3:])
+		return i.del(mut)
+	case "TEAM":
+		return i.team(mut)
 	case "RELOAD":
-		if allowReloads {
+		if mut.requester != nil {
 			return i.reload()
 		}
 	case "READ":
 
 	default:
-		return fmt.Errorf("unknown update %s", update[0])
+		return ErrInvalidCommand
 	}
 
 	return nil
@@ -245,47 +303,23 @@ func (i *Incident) update(update []string, msg ) error {
 // Updates are applied to the in-memory incident and then written to the file if
 // they were successful.
 func (i *Incident) processUpdates() {
-	for update := range i.updates {
-		updates := strings.Split(update.update, " ")
-		err := i.update(updates, true)
+	for mut := range i.updates {
+		logMsg := mut.LogMessage()
+
+		err := i.applyMutation(mut)
 		if err != nil {
-			update.result <- err
+			mut.Error(err)
 		}
 
-		logMsg := update.timestamp.Format(time.RFC3339) + " " + update.update + "\n"
 		_, err = i.f.WriteString(logMsg)
 		if err != nil {
-			update.result <- err
+			mut.Undo()
+			mut.Error(err)
 		}
-
-		close(update.result)
 	}
 }
 
-// Update applies a mutation string to the incident.
-func (i *Incident) Update(update string) error {
-	result := make(chan error)
-	i.updates <- &mutation{
-		update:    update,
-		result:    result,
-		timestamp: time.Now(),
-	}
-
-	return <-result
-}
-
-// Reload reloads the incident from the file.
-func (i *Incident) Reload() error {
-	result := make(chan error)
-	i.updates <- &mutation{
-		update:    "RELOAD",
-		result:    result,
-		timestamp: time.Now(),
-	}
-
-	return <-result
-}
-
+// Name returns the name of the incident.
 func (i *Incident) Name() string {
 	if i.Training {
 		return fmt.Sprint("Training %s %s", i.Date, i.Location)
