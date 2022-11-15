@@ -24,4 +24,4 @@ jobs:
             **/go.mod
             **/go.sum
       - name: Unit Tests
-        run: go test
+        run: go test ./...
