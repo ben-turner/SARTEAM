@@ -1,0 +1,27 @@
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+name: Tests
+jobs:
+  backend:
+    strategy:
+      matrix:
+        # Generics require 1.18+
+        go-version: [1.18.x, 1.19.x]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Install Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: ${{ matrix.go-version }}
+          check-latest: true
+          cache: true
+          cache-dependency-path: |
+            **/go.mod
+            **/go.sum
+      - name: Unit Tests
+        run: go test ./...
