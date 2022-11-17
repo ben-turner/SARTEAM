@@ -144,6 +144,7 @@ func TestError(t *testing.T) {
 	errorChan := make(chan error, 1)
 
 	conn := ConnStub(sendChan, errorChan)
+	defer conn.Close()
 
 	a := &Mutation{
 		ID:        "12345",

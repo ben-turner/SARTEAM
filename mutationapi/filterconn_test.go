@@ -1,10 +1,7 @@
 package mutationapi
 
 import (
-	"encoding/json"
 	"fmt"
-	"log"
-	"os"
 	"testing"
 )
 
@@ -61,14 +58,9 @@ func TestShouldSend(t *testing.T) {
 	var conn Conn = nil
 
 	for i, test := range tests {
-		log.Println(i)
 		filter := NewFilterConn(conn, test.filter)
 		t.Run(fmt.Sprintf("test %d", i), func(t *testing.T) {
 			mut := &Mutation{Path: test.path}
-
-			e := json.NewEncoder(os.Stdout)
-			e.SetIndent("", "  ")
-			// e.Encode(filter.(*filterConn).filter)
 
 			actual := filter.(*filterConn).shouldSend(mut)
 			if actual != test.expected {

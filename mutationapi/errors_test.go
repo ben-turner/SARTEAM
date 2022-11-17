@@ -9,6 +9,7 @@ func TestErrCommunicationFailed(t *testing.T) {
 	t.Parallel()
 
 	conn := NoopConn()
+	defer conn.Close()
 
 	wrapped := errors.New("wrapped error")
 	ecf := &ErrCommunicationFailed{
@@ -79,6 +80,7 @@ func TestErrClosed(t *testing.T) {
 	t.Parallel()
 
 	conn := NoopConn()
+	defer conn.Close()
 
 	wrapped := errors.New("wrapped error")
 	ec := &ErrClosed{

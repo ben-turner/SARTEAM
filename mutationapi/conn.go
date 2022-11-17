@@ -14,7 +14,7 @@ type Conn interface {
 	Send(*Mutation) error
 
 	// Receive receives a mutation from the connection. If the connection is
-	// closed, this will return ErrClosed.
+	// closed, this will return ErrClosed. This is a blocking function.
 	Receive() (*Mutation, error)
 
 	// Close closes the connection. Once a connection is closed, it cannot be used

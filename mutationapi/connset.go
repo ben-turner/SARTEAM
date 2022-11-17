@@ -14,15 +14,24 @@ type ConnSet struct {
 // Add adds a connection to the set.
 func (s *ConnSet) Add(conn Conn) {
 	s.lock.Lock()
+	defer s.lock.Unlock()
+
 	s.values[conn] = struct{}{}
-	s.lock.Unlock()
 }
 
 // Remove removes a connection from the set.
 func (s *ConnSet) Remove(conn Conn) {
 	s.lock.Lock()
+	defer s.lock.Unlock()
+
 	delete(s.values, conn)
-	s.lock.Unlock()
+}
+
+func (s *ConnSet) Len() int {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+
+	return len(s.values)
 }
 
 // Broadcast sends a mutation to all connections in the set.
@@ -30,21 +39,23 @@ func (s *ConnSet) Broadcast(mutation *Mutation) {
 	// It might make sense to read all the connections first, then unlock, then send
 	// the mutations.
 	s.lock.RLock()
+	defer s.lock.RUnlock()
+
 	for conn := range s.values {
 		conn.Send(mutation)
 	}
-	s.lock.RUnlock()
 }
 
 // Purge removes all closed connections from the set.
 func (s *ConnSet) Purge() {
 	s.lock.Lock()
+	defer s.lock.Unlock()
+
 	for conn := range s.values {
 		if conn.IsClosed() {
-			s.Remove(conn)
+			delete(s.values, conn)
 		}
 	}
-	s.lock.Unlock()
 }
 
 // PipeAll receives mutations from all connections in a ConnSet and sends them to

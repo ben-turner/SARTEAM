@@ -13,6 +13,8 @@ func TestBroadcast(t *testing.T) {
 
 	conn1 := ConnStub(conn1Mutations, errs)
 	conn2 := ConnStub(conn2Mutations, errs)
+	defer conn1.Close()
+	defer conn2.Close()
 
 	set := NewConnSet()
 	set.Add(conn1)
@@ -53,22 +55,24 @@ func TestConnSet(t *testing.T) {
 
 	conn1 := NoopConn()
 	conn2 := NoopConn()
+	defer conn1.Close()
+	defer conn2.Close()
 
 	set := NewConnSet()
 	set.Add(conn1)
 	set.Add(conn2)
 
-	if len(set) != 2 {
+	if set.Len() != 2 {
 		t.Fatal("Unexpected length")
 	}
 
 	set.Remove(conn1)
-	if len(set) != 1 {
+	if set.Len() != 1 {
 		t.Fatal("Unexpected length")
 	}
 
 	set.Remove(conn2)
-	if len(set) != 0 {
+	if set.Len() != 0 {
 		t.Fatal("Unexpected length")
 	}
 
@@ -77,7 +81,7 @@ func TestConnSet(t *testing.T) {
 
 	conn1.Close()
 	set.Purge()
-	if len(set) != 1 {
+	if set.Len() != 1 {
 		t.Fatal("Unexpected length")
 	}
 }
