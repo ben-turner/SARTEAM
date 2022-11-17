@@ -20,11 +20,8 @@ var generateMutationID = func() MutationID {
 
 // Pipe receives mutations from a *Conn and sends them to a channel until the
 // *Conn is closed or the provided context is done. This is a blocking function.
-// If the context is done or the *Conn returns an error, this will close the
-// mutations channel.
+// If the context is done or the *Conn returns an error, the error is returned.
 func Pipe(ctx context.Context, conn Conn, mutations chan<- *Mutation) error {
-	defer close(mutations)
-
 	for {
 		select {
 		case <-ctx.Done():

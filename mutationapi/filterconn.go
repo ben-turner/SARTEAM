@@ -4,71 +4,53 @@ import (
 	"strings"
 )
 
-type filterStatus uint8
+type filterType uint8
 
 const (
-	// filterStatusNoMatch indicates that a filter rule doesn't match a path.
-	filterStatusNoMatch filterStatus = iota
-	// filterStatusAllow indicates that a filter rule matches a path and is not
-	// inverted.
-	filterStatusAllow
-	// filterStatusReject indicates that a filter rule matches a path and is
-	// inverted.
-	filterStatusReject
+	// filterStatusNoMatch indicates that there is no defined behavior for the
+	// given path and the default behavior should be used.
+	filterTypeUndefined filterType = iota
+	// filterTypeInclude indicates that a filter rule matches a path and should
+	// be included.
+	filterTypeInclude
+	// filterTypeExclude indicates that a filter rule matches a path and should
+	// be excluded.
+	filterTypeExclude
+	// filterTypeImpliedExclude indicates that a filter rule matches a path and
+	// should be excluded, but that the rule was implied by another rule.
+	filterTypeImpliedExclude
 )
+
+func (t filterType) String() string {
+	switch t {
+	case filterTypeUndefined:
+		return "undefined"
+	case filterTypeInclude:
+		return "include"
+	case filterTypeExclude:
+		return "exclude"
+	case filterTypeImpliedExclude:
+		return "implied exclude"
+	default:
+		return "unknown"
+	}
+}
 
 // filterRule rule that can be used to filter mutations.
 type filterRule struct {
-	inverted bool
-	path     []string
+	T        filterType
+	Children map[string]*filterRule
 }
 
-// match evaluates the given path against the filter rule. Returns
-// filterStatusNoMatch if the path doesn't match the rule's path,
-// filterStatusAllow if the path matches the rule's path and the rule is not
-// inverted, and filterStatusReject if the path matches the rule's path and the
-// rule is inverted.
-func (r *filterRule) match(path []string) filterStatus {
-	if len(path) < len(r.path) {
-		return filterStatusNoMatch
+func (t filterType) invert() filterType {
+	switch t {
+	case filterTypeInclude:
+		return filterTypeExclude
+	case filterTypeExclude:
+		return filterTypeInclude
 	}
 
-	for i, p := range r.path {
-		if p != path[i] {
-			return filterStatusNoMatch
-		}
-	}
-
-	if r.inverted {
-		return filterStatusReject
-	}
-
-	return filterStatusAllow
-}
-
-// parseFilterRule parses a filter rule string and returns a filterRule. Rules
-// are a slash-separated path with an optional ! prefix.
-//
-// Returns ErrInvalidFilterRule for empty or invalid rules.
-func parseFilterRule(rule string) (*filterRule, error) {
-	if len(rule) == 0 {
-		return nil, &ErrInvalidFilterRule{rule}
-	}
-
-	inverted := false
-	if rule[0] == '!' {
-		inverted = true
-		rule = rule[1:]
-	}
-
-	if len(rule) == 0 {
-		return nil, &ErrInvalidFilterRule{rule}
-	}
-
-	return &filterRule{
-		inverted: inverted,
-		path:     strings.Split(rule, "/"),
-	}, nil
+	return filterTypeUndefined
 }
 
 // filterConn is a Conn that filters out mutations that don't match the given
@@ -77,26 +59,48 @@ type filterConn struct {
 	// Conn is the wrapped connection.
 	Conn
 
-	// rules is the set of rules to match mutations against.
-	rules []*filterRule
+	// filter is a tree representing which paths should be allowed.
+	filter *filterRule
+}
+
+func searchTree(tree *filterRule, path []string) filterType {
+	if tree == nil {
+		return filterTypeUndefined
+	}
+
+	if len(path) == 0 {
+		return tree.T
+	}
+
+	res := searchTree(tree.Children[path[0]], path[1:])
+
+	if res == filterTypeUndefined {
+		res = searchTree(tree.Children["*"], path[1:])
+	}
+
+	for i := 1; i <= len(path) &&
+		(res == filterTypeUndefined ||
+			res == filterTypeImpliedExclude); i++ {
+		tail := path[i:]
+		newRes := searchTree(tree.Children["**"], tail)
+		if newRes != filterTypeUndefined {
+			res = newRes
+		}
+	}
+
+	return res
 }
 
 // shouldSend returns true if the given mutation should be sent to the wrapped
 // connection.
+//
+// We first walk down the filter tree to find the most specific rule that
+// matches the mutation. If no exact match is found, we walk up the tree checking
+// less specific wildcard rules.
 func (c *filterConn) shouldSend(mutation *Mutation) bool {
-	s := filterStatusNoMatch
-	for _, rule := range c.rules {
-		switch rule.match(mutation.Path) {
-		case filterStatusAllow:
-			s = filterStatusAllow
-		case filterStatusReject:
-			s = filterStatusReject
-		}
-	}
+	res := searchTree(c.filter, mutation.Path)
+	return res != filterTypeExclude && res != filterTypeImpliedExclude
 
-	// If no rule matched, the default is to reject. Therefore allow is the only
-	// truthy status.
-	return s == filterStatusAllow
 }
 
 // Send sends a mutation to the wrapped connection if it matches one of the
@@ -107,6 +111,64 @@ func (c *filterConn) Send(mutation *Mutation) error {
 	}
 
 	return c.Conn.Send(mutation)
+}
+
+func (c *filterConn) AddRule(rule string) {
+	t := filterTypeInclude
+	if rule[0] == '!' {
+		t = filterTypeExclude
+		rule = rule[1:]
+	}
+
+	path := strings.Split(rule, "/")
+
+	if path[0] == "" {
+		path = path[1:]
+	}
+
+	curr := c.filter
+
+	for _, p := range path {
+		// Including a named path will implicitly exclude siblings.
+		if t == filterTypeInclude && p != "*" && p != "**" {
+			nextChild, ok := curr.Children["*"]
+			if !ok {
+				nextChild = &filterRule{
+					T:        filterTypeUndefined,
+					Children: make(map[string]*filterRule),
+				}
+				curr.Children["*"] = nextChild
+			}
+			if nextChild.T == filterTypeUndefined {
+				nextChild.T = filterTypeImpliedExclude
+			}
+
+			anyChild, ok := curr.Children["**"]
+			if !ok {
+				anyChild = &filterRule{
+					T:        filterTypeUndefined,
+					Children: make(map[string]*filterRule),
+				}
+				curr.Children["**"] = anyChild
+			}
+			if anyChild.T == filterTypeUndefined {
+				anyChild.T = filterTypeImpliedExclude
+			}
+		}
+
+		next, ok := curr.Children[p]
+		if !ok {
+			next = &filterRule{
+				T:        filterTypeUndefined,
+				Children: make(map[string]*filterRule),
+			}
+			curr.Children[p] = next
+		}
+
+		curr = next
+	}
+
+	curr.T = t
 }
 
 // NewFilterConn wraps an existing Conn and filters out mutations that don't
@@ -123,19 +185,15 @@ func (c *filterConn) Send(mutation *Mutation) error {
 //
 // The above rules will allow mutations to /foo and /foo/bar/baz, but not to
 // /foo/bar.
-func NewFilterConn(conn Conn, ruleStrings []string) (Conn, error) {
-	rules := make([]*filterRule, len(ruleStrings))
-
-	var err error
-	for i, path := range ruleStrings {
-		rules[i], err = parseFilterRule(path)
-		if err != nil {
-			return nil, err
-		}
+func NewFilterConn(conn Conn, ruleStrings []string) Conn {
+	c := &filterConn{
+		Conn:   conn,
+		filter: &filterRule{Children: make(map[string]*filterRule)},
 	}
 
-	return &filterConn{
-		Conn:  conn,
-		rules: rules,
-	}, nil
+	for _, rule := range ruleStrings {
+		c.AddRule(rule)
+	}
+
+	return c
 }

@@ -118,6 +118,10 @@ func (m *Mutation) BodyAsBool() bool {
 
 // Error marks the mutation as failed and sends the error message to the client.
 func (m *Mutation) Error(err error) {
+	if m == nil {
+		return
+	}
+
 	m.Conn.sendError(err)
 }
 

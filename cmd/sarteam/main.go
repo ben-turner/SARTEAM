@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
+
 	"github.com/spf13/viper"
 
-	"github.com/ben-turner/sarteam/internal/sarteam"
+	"github.com/ben-turner/sarteam/sarteam"
 )
 
 // main is the entry point for the application. It creates a new SARTeam instance and starts it.
@@ -23,9 +25,12 @@ func main() {
 		panic(err)
 	}
 
-	s := sarteam.New(config)
+	s, err := sarteam.New(config)
+	if err != nil {
+		panic(err)
+	}
 
-	err := s.ListenAndServe()
+	err = s.Start(context.Background())
 	if err != nil {
 		panic(err)
 	}

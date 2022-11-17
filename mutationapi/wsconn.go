@@ -84,7 +84,7 @@ func (c *wsConn) writeUnsafe(msg *wsMessage) error {
 
 // write is a goroutine that sends messages from the sendMessages channel to the
 // websocket. It is expected that write is the only goroutine writing to the
-// websocket. write must be called exactly once.
+// websocket. write must be started exactly once.
 func (c *wsConn) write() {
 	for {
 		select {
@@ -92,7 +92,10 @@ func (c *wsConn) write() {
 			return
 		case msg := <-c.sendMessages:
 			err := c.writeUnsafe(msg)
-			msg.result <- err
+			select {
+			case msg.result <- err:
+			default: // Carry on if the result channel is full.
+			}
 		}
 	}
 }
@@ -126,10 +129,21 @@ func (c *wsConn) work() {
 // will return ErrClosed.
 func (c *wsConn) Send(mut *Mutation) error {
 	res := make(chan error)
-	c.sendMessages <- &wsMessage{
+	msg := &wsMessage{
 		t:      websocket.TextMessage,
 		p:      []byte(mut.String()),
 		result: res,
+	}
+
+	select {
+	case c.sendMessages <- msg:
+	case <-c.ctx.Done():
+		return &ErrClosed{nil, c}
+	default:
+		return &ErrCommunicationFailed{
+			Conn: c,
+			Msg:  "send queue full",
+		}
 	}
 
 	return <-res
@@ -198,6 +212,12 @@ type WebsocketHandler struct {
 	// before closing. If Timeout is 0, any calls to ServeHTTP will panic. It is
 	// recommended that Timeout be set to a multiple of PingInterval.
 	Timeout time.Duration
+	// SendQueueSize is the size of the queue that will be used to buffer outgoing
+	// messages.
+	SendQueueSize int
+	// RecQueueSize is the size of the queue that will be used to buffer incoming
+	// messages.
+	RecQueueSize int
 }
 
 // ServeHTTP upgrades the http request to a websocket connection and creates a
@@ -217,8 +237,8 @@ func (h *WebsocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ws:           ws,
 		ctx:          ctx,
 		cancel:       cancel,
-		recMessages:  make(chan *wsMessage),
-		sendMessages: make(chan *wsMessage),
+		recMessages:  make(chan *wsMessage, h.RecQueueSize),
+		sendMessages: make(chan *wsMessage, h.SendQueueSize),
 		mutations:    make(chan *Mutation),
 
 		pingTicker:    time.NewTicker(h.PingInterval),

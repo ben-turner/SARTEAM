@@ -4,3 +4,5 @@ webRoot: web/dist
 listenAddr: "localhost:8780"
 pingInterval: 5s
 connectionTimeout: 30s
+stateFile: test.log
+mutationBufferSize: 3
