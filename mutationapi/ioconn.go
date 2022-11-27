@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"sync"
 )
 
 // ioConn is a connection that reads and writes mutations to a file.
@@ -13,6 +14,7 @@ type ioConn struct {
 	rwc     io.ReadWriteCloser
 	scanner *bufio.Scanner
 	line    int
+	idLock  sync.Mutex
 	usedIDs map[MutationID]struct{}
 	name    string
 }
@@ -20,20 +22,28 @@ type ioConn struct {
 // Send appends the mutation to the file. The mutation is assigned a random ID
 // to avoid reading mutations that were written by this instance.
 func (c *ioConn) Send(mut *Mutation) error {
-	mut.ID = generateMutationID() // This should probably not mutate the original mutation.
-	c.usedIDs[mut.ID] = struct{}{}
+	c.idLock.Lock()
+	var once sync.Once
+	defer once.Do(c.idLock.Unlock)
 
-	if _, err := io.WriteString(c.rwc, mut.String()+"\n"); err != nil {
+	if _, ok := c.usedIDs[mut.ID]; ok {
+		return nil // Already sent.
+	}
+
+	copy := *mut
+
+	copy.ID = generateMutationID()
+	c.usedIDs[copy.ID] = struct{}{}
+	once.Do(c.idLock.Unlock)
+
+	if _, err := io.WriteString(c.rwc, copy.String(false)+"\n"); err != nil {
 		return &ErrCommunicationFailed{err, "failed to write", c}
 	}
 
 	return nil
 }
 
-// Receive reads the next mutation from the file. Invalid mutations are logged
-// and skipped.
-func (c *ioConn) Receive() (*Mutation, error) {
-start:
+func (c *ioConn) getNext() (*Mutation, error) {
 	if !c.scanner.Scan() {
 		err := c.scanner.Err()
 		if errors.Is(err, os.ErrClosed) || err == nil {
@@ -45,22 +55,42 @@ start:
 	c.line++
 	m, err := ParseMutation(c.scanner.Text(), c)
 	if err != nil {
-		c.sendError(err)
-		goto start
+		return nil, err
 	}
-	if _, ok := c.usedIDs[m.ID]; ok {
-		// Discard this as it's a duplicate, probably because we wrote it.
-		// Use a goto to avoid excessive recursion and stack overflows for many
-		// consecutive duplicates.
-		goto start
-	}
-
-	c.usedIDs[m.ID] = struct{}{}
-
-	// Replace the ID with the line number to make output more readable.
-	m.ID = MutationID(strconv.Itoa(c.line))
+	m.ID = m.ClientID                             // Trust the client ID.
+	m.ClientID = MutationID(strconv.Itoa(c.line)) // Use the line number as the client ID.
 
 	return m, nil
+}
+
+// Receive reads the next mutation from the file. Invalid mutations are logged
+// and skipped.
+func (c *ioConn) Receive() (*Mutation, error) {
+	for {
+		m, err := c.getNext()
+		if err != nil {
+			if errors.Is(err, &ErrMutationFailed{}) {
+				c.sendError(err)
+				continue
+			}
+
+			return nil, err
+		}
+
+		c.idLock.Lock()
+		_, ok := c.usedIDs[m.ID]
+
+		if !ok {
+			c.usedIDs[m.ID] = struct{}{}
+		}
+		c.idLock.Unlock()
+
+		if ok {
+			continue // Already received.
+		}
+
+		return m, nil
+	}
 }
 
 // Close closes the file.

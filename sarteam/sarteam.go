@@ -23,16 +23,8 @@ type SARTeam struct {
 	conns *mutationapi.ConnSet
 
 	mutations chan *mutationapi.Mutation
-}
 
-// applyMutation applies a single mutation to the server state. This method is
-// not thread-safe.
-func (S *SARTeam) applyMutation(m *mutationapi.Mutation) error {
-	if m == nil {
-		return &mutationapi.ErrMutationFailed{Msg: "mutation is nil"}
-	}
-
-	return nil
+	state *mutationapi.MutableState
 }
 
 // work is a blocking method that does all the work of the server. It is
@@ -43,13 +35,12 @@ func (s *SARTeam) work() {
 	for {
 		select {
 		case <-s.ctx.Done():
-			log.Println("Stopping mutation processing")
 			return
 		case m := <-s.mutations:
-			log.Println("From conn:", m.Conn)
-			log.Println("Processing mutation:", m)
-			err := s.applyMutation(m)
+			log.Printf("%s %s %s", m.Action, m.Path, m.Body)
+			err := s.state.ApplyMutation(m)
 			if err != nil {
+				log.Printf("ERROR %s %s", m.ClientID, err)
 				m.Error(err)
 				continue
 			}
@@ -65,6 +56,8 @@ func (s *SARTeam) work() {
 // mutations from the connection, and will send accepted mutations to the
 // connection.
 func (s *SARTeam) AddConn(conn mutationapi.Conn) {
+	log.Printf("CONN %s", conn.String())
+
 	s.conns.Add(conn)
 
 	// Does nothing if the context is already done.
@@ -73,11 +66,11 @@ func (s *SARTeam) AddConn(conn mutationapi.Conn) {
 
 // ErrAlreadyRunning is returned when a server is started that is already
 // running.
-var ErrAlreadyRunning = errors.New("server is already running")
+var ErrAlreadyRunning = errors.New("ERROR server is already running")
 
 // Start starts the SARTeam server. It blocks until the server is stopped.
 func (s *SARTeam) Start(ctx context.Context) error {
-	log.Println("Starting server")
+	log.Println("START starting SARTEAM server")
 
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
@@ -99,7 +92,7 @@ func (s *SARTeam) Start(ctx context.Context) error {
 
 // Stop stops the SARTeam server.
 func (s *SARTeam) Stop() {
-	log.Println("Stopping server")
+	log.Println("STOP Stop() called")
 	s.cancel()
 }
 
@@ -108,12 +101,18 @@ func New(config *Config) (*SARTeam, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Create a cancelled context so we can use it before starting
 
+	state, err := CreateState(config)
+	if err != nil {
+		return nil, err
+	}
+
 	s := &SARTeam{
 		ServeMux:  http.NewServeMux(),
 		ctx:       ctx,
 		config:    config,
 		conns:     mutationapi.NewConnSet(),
 		mutations: make(chan *mutationapi.Mutation, config.MutationBufferSize),
+		state:     state,
 	}
 
 	// Set up top-level mutation log. This is used to store mutations that are
@@ -124,7 +123,7 @@ func New(config *Config) (*SARTeam, error) {
 		return nil, err
 	}
 	fileConn := mutationapi.NewIOConn(f, f.Name())
-	filterConn := mutationapi.NewFilterConn(fileConn, []string{"!incidents"})
+	filterConn := fileConn // mutationapi.NewFilterConn(fileConn, []string{"!incidents/**"})
 	if err != nil {
 		return nil, err
 	}

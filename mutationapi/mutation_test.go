@@ -63,7 +63,7 @@ func TestBodyAsJSON(t *testing.T) {
 	t.Parallel()
 
 	a := &Mutation{
-		body: []byte("{\"foo\": \"bar\"}"),
+		Body: []byte("{\"foo\": \"bar\"}"),
 	}
 
 	var m map[string]interface{}
@@ -78,7 +78,7 @@ func TestBodyAsJSON(t *testing.T) {
 	}
 
 	// Fails for invalid JSON
-	a.body = []byte("Hello World!")
+	a.Body = []byte("Hello World!")
 	err = a.BodyAsJSON(&m)
 
 	if err == nil {
@@ -90,7 +90,7 @@ func TestBodyAsString(t *testing.T) {
 	t.Parallel()
 
 	a := &Mutation{
-		body: []byte("{\"foo\": \"bar\"}"),
+		Body: []byte("{\"foo\": \"bar\"}"),
 	}
 
 	if a.BodyAsString() != "{\"foo\": \"bar\"}" {
@@ -98,7 +98,7 @@ func TestBodyAsString(t *testing.T) {
 	}
 
 	// Not just JSON
-	a.body = []byte("Hello World!")
+	a.Body = []byte("Hello World!")
 
 	if a.BodyAsString() != "Hello World!" {
 		t.Error("BodyAsString() returned unexpected result")
@@ -117,21 +117,30 @@ func TestBodyAsBool(t *testing.T) {
 		Conn:      nil,
 		Action:    MutationActionCreate,
 		Path:      []string{"foo", "bar", "baz"},
-		body:      []byte("true"),
+		Body:      []byte("true"),
 	}
 
-	if !a.BodyAsBool() {
+	res, ok := a.BodyAsBool()
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if !res {
 		t.Fatal("expected body to be true")
 	}
 
-	a.body = []byte("false")
-	if a.BodyAsBool() {
+	a.Body = []byte("false")
+	res, ok = a.BodyAsBool()
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if res {
 		t.Fatal("expected body to be false")
 	}
 
-	a.body = []byte("foo")
-	if a.BodyAsBool() {
-		t.Fatal("expected body to be false")
+	a.Body = []byte("foo")
+	_, ok = a.BodyAsBool()
+	if ok {
+		t.Fatal("expected not ok")
 	}
 }
 
@@ -152,7 +161,7 @@ func TestError(t *testing.T) {
 		Conn:      conn,
 		Action:    MutationActionCreate,
 		Path:      []string{"foo", "bar", "baz"},
-		body:      []byte("{\"foo\": \"bar\"}"),
+		Body:      []byte("{\"foo\": \"bar\"}"),
 	}
 
 	sentErr := errors.New("test error")
@@ -177,13 +186,13 @@ func TestString(t *testing.T) {
 		Conn:      conn,
 		Action:    MutationActionCreate,
 		Path:      []string{"foo", "bar", "baz"},
-		body:      []byte("{\"foo\": \"bar\"}"),
+		Body:      []byte("{\"foo\": \"bar\"}"),
 	}
 
 	expected := "2022-11-07T14:05:10Z 12345 CREATE foo/bar/baz {\"foo\": \"bar\"}"
 
-	if a.String() != expected {
-		t.Fatalf("expected %v, got %v", expected, a.String())
+	if a.String(false) != expected {
+		t.Fatalf("expected %q, got %q", expected, a.String(false))
 	}
 
 	// Sanity check that a full mutation with timestamp specified is unchanged
@@ -195,8 +204,8 @@ func TestString(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if a.String() != msg {
-		t.Fatalf("expected %q, got %q", msg, a.String())
+	if a.String(true) != msg {
+		t.Fatalf("expected %q, got %q", msg, a.String(true))
 	}
 
 	// Check that time is converted to UTC
@@ -206,14 +215,14 @@ func TestString(t *testing.T) {
 		Conn:         conn,
 		Action:       MutationActionCreate,
 		Path:         []string{"foo", "bar", "baz"},
-		body:         []byte("{\"foo\": \"bar\"}"),
+		Body:         []byte("{\"foo\": \"bar\"}"),
 		OriginalBody: []byte("{\"foo\": \"baz\"}"),
 	}
 
 	expected = "2022-11-07T22:05:10Z 12345 CREATE foo/bar/baz {\"foo\": \"bar\"}"
 
-	if a.String() != expected {
-		t.Fatalf("expected %v, got %v", expected, a.String())
+	if a.String(false) != expected {
+		t.Fatalf("expected %q, got %q", expected, a.String(false))
 	}
 }
 
@@ -257,20 +266,22 @@ func TestInverse(t *testing.T) {
 
 	// Create/Delete
 	a := &Mutation{
+		ClientID:  "67890",
 		ID:        "12345",
 		Timestamp: constTime,
 		Conn:      conn,
 		Action:    MutationActionCreate,
 		Path:      []string{"foo", "bar", "baz"},
-		body:      []byte("{\"foo\": \"bar\"}"),
+		Body:      []byte("{\"foo\": \"bar\"}"),
 	}
 	expected := &Mutation{
+		ClientID:     "-67890",
 		ID:           "-12345",
 		Timestamp:    constTime,
 		Conn:         conn,
 		Action:       MutationActionDelete,
 		Path:         []string{"foo", "bar", "baz"},
-		body:         nil,
+		Body:         nil,
 		OriginalBody: []byte("{\"foo\": \"bar\"}"),
 	}
 
@@ -286,21 +297,23 @@ func TestInverse(t *testing.T) {
 
 	// Update
 	a = &Mutation{
+		ClientID:     "67890",
 		ID:           "12345",
 		Timestamp:    constTime,
 		Conn:         conn,
 		Action:       MutationActionUpdate,
 		Path:         []string{"foo", "bar", "baz"},
-		body:         []byte("{\"foo\": \"baz\"}"),
+		Body:         []byte("{\"foo\": \"baz\"}"),
 		OriginalBody: []byte("{\"foo\": \"bar\"}"),
 	}
 	expected = &Mutation{
+		ClientID:     "-67890",
 		ID:           "-12345",
 		Timestamp:    constTime,
 		Conn:         conn,
 		Action:       MutationActionUpdate,
 		Path:         []string{"foo", "bar", "baz"},
-		body:         []byte("{\"foo\": \"bar\"}"),
+		Body:         []byte("{\"foo\": \"bar\"}"),
 		OriginalBody: []byte("{\"foo\": \"baz\"}"),
 	}
 
@@ -323,12 +336,13 @@ func TestInverse(t *testing.T) {
 
 	// Test invalid mutations.
 	a = &Mutation{
+		ClientID:  "67890",
 		ID:        "12345",
 		Timestamp: constTime,
 		Conn:      conn,
 		Action:    MutationActionUnknown,
 		Path:      []string{"foo", "bar", "baz"},
-		body:      []byte("{\"foo\": \"bar\"}"),
+		Body:      []byte("{\"foo\": \"bar\"}"),
 	}
 
 	b = a.Inverse()
@@ -346,12 +360,13 @@ func TestParseMutationWith(t *testing.T) {
 	// Test with a valid mutation with no body.
 	msg := "2022-11-07T14:05:10Z 12345 READ foo/bars/baz"
 	expected := &Mutation{
-		ID:        "12345",
+		ClientID:  "12345",
+		ID:        "test-mutation-id",
 		Timestamp: time.Date(2022, 11, 7, 14, 5, 10, 0, time.UTC),
 		Conn:      conn,
 		Action:    MutationActionRead,
 		Path:      []string{"foo", "bars", "baz"},
-		body:      []byte{},
+		Body:      []byte{},
 	}
 
 	mut, err := ParseMutation(msg, conn)
@@ -360,18 +375,19 @@ func TestParseMutationWith(t *testing.T) {
 	}
 
 	if !mut.Equal(expected) {
-		t.Fatalf("expected %v, got %v", expected, mut)
+		t.Fatalf("expected %+v, got %+v", expected, mut)
 	}
 
 	// Test with a valid mutation with a body.
 	msg = "2022-11-07T14:05:10Z 12345 CREATE foo/bars/baz {\"foo\": \"bar\"}"
 	expected = &Mutation{
-		ID:        "12345",
+		ClientID:  "12345",
+		ID:        "test-mutation-id",
 		Timestamp: time.Date(2022, 11, 7, 14, 5, 10, 0, time.UTC),
 		Conn:      conn,
 		Action:    MutationActionCreate,
 		Path:      []string{"foo", "bars", "baz"},
-		body:      []byte("{\"foo\": \"bar\"}"),
+		Body:      []byte("{\"foo\": \"bar\"}"),
 	}
 
 	mut, err = ParseMutation(msg, conn)
@@ -380,7 +396,7 @@ func TestParseMutationWith(t *testing.T) {
 	}
 
 	if !mut.Equal(expected) {
-		t.Fatalf("expected %v, got %v", expected, mut)
+		t.Fatalf("expected %+v, got %+v", expected, mut)
 	}
 
 	// Test with an empty message.
@@ -400,7 +416,8 @@ func TestParseMutationWith(t *testing.T) {
 	// Test with a message without a timestamp.
 	msg = "12345 CREATE foo/bars/baz"
 	expected = &Mutation{
-		ID:        "12345",
+		ClientID:  "12345",
+		ID:        "test-mutation-id",
 		Timestamp: constTime,
 		Conn:      conn,
 		Action:    MutationActionCreate,
@@ -413,7 +430,7 @@ func TestParseMutationWith(t *testing.T) {
 	}
 
 	if !mut.Equal(expected) {
-		t.Fatalf("expected %v, got %v", expected, mut)
+		t.Fatalf("expected %+v, got %+v", expected, mut)
 	}
 }
 
@@ -424,23 +441,30 @@ func TestEquivalent(t *testing.T) {
 	defer conn.Close()
 
 	a := &Mutation{
+		ClientID:  "67890",
 		ID:        "12345",
 		Timestamp: time.Now(),
 		Conn:      nil,
 		Action:    MutationActionCreate,
 		Path:      []string{"foo", "bar", "baz"},
-		body:      []byte("{\"foo\": \"bar\"}"),
+		Body:      []byte("{\"foo\": \"bar\"}"),
 	}
 
 	b := &Mutation{
+		ClientID:  "67890",
 		ID:        "12345",
 		Timestamp: time.Now(),
 		Conn:      nil,
 		Action:    MutationActionCreate,
 		Path:      []string{"foo", "bar", "baz"},
-		body:      []byte("{\"foo\": \"bar\"}"),
+		Body:      []byte("{\"foo\": \"bar\"}"),
 	}
 
+	if !a.Equivalent(b) {
+		t.Fatal("expected mutations to be equivalent")
+	}
+
+	b.ClientID = "98765"
 	if !a.Equivalent(b) {
 		t.Fatal("expected mutations to be equivalent")
 	}
@@ -477,7 +501,7 @@ func TestEquivalent(t *testing.T) {
 	}
 
 	b.Path = []string{"foo", "bar", "baz"}
-	b.body = []byte("{\"foo\": \"baz\"}")
+	b.Body = []byte("{\"foo\": \"baz\"}")
 	if a.Equivalent(b) {
 		t.Fatal("expected mutations to not be equivalent")
 	}
@@ -495,12 +519,13 @@ func TestEqual(t *testing.T) {
 	defer conn.Close()
 
 	a := &Mutation{
+		ClientID:     "67890",
 		ID:           "12345",
 		Timestamp:    time.Now(),
 		Conn:         conn,
 		Action:       MutationActionCreate,
 		Path:         []string{"foo", "bar", "baz"},
-		body:         []byte("{\"foo\": \"bar\"}"),
+		Body:         []byte("{\"foo\": \"bar\"}"),
 		OriginalBody: []byte("{\"foo\": \"bar\"}"),
 	}
 	c := *a
@@ -508,6 +533,12 @@ func TestEqual(t *testing.T) {
 
 	if !a.Equal(b) {
 		t.Fatal("expected mutations to be equal")
+	}
+
+	// ClientID Mismatch
+	b.ClientID = "98765"
+	if a.Equal(b) {
+		t.Fatal("expected mutations to not be equal")
 	}
 
 	// ID Mismatch
@@ -552,13 +583,13 @@ func TestEqual(t *testing.T) {
 
 	// Body Mismatch
 	b.Path = []string{"foo", "bar", "baz"}
-	b.body = []byte("{\"foo\": \"baz\"}")
+	b.Body = []byte("{\"foo\": \"baz\"}")
 	if a.Equal(b) {
 		t.Fatal("expected mutations to not be equal")
 	}
 
 	// Timestamp Mismatch
-	b.body = []byte("{\"foo\": \"bar\"}")
+	b.Body = []byte("{\"foo\": \"bar\"}")
 	b.Timestamp = time.Now().Add(time.Second)
 	if a.Equal(b) {
 		t.Fatal("expected mutations to not be equal")

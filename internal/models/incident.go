@@ -322,8 +322,8 @@ func (i *Incident) processUpdates() {
 // Name returns the name of the incident.
 func (i *Incident) Name() string {
 	if i.Training {
-		return fmt.Sprint("Training %s %s", i.Date, i.Location)
+		return fmt.Sprintf("Training %s %s", i.Date, i.Location)
 	}
 
-	return fmt.Sprint("%s %s", i.Date, i.Location)
+	return fmt.Sprintf("%s %s", i.Date, i.Location)
 }

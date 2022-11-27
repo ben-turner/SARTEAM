@@ -42,17 +42,6 @@ type filterRule struct {
 	Children map[string]*filterRule
 }
 
-func (t filterType) invert() filterType {
-	switch t {
-	case filterTypeInclude:
-		return filterTypeExclude
-	case filterTypeExclude:
-		return filterTypeInclude
-	}
-
-	return filterTypeUndefined
-}
-
 // filterConn is a Conn that filters out mutations that don't match the given
 // set of paths.
 type filterConn struct {

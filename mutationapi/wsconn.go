@@ -119,6 +119,7 @@ func (c *wsConn) work() {
 					c.sendError(err)
 					continue
 				}
+				mut.Timestamp = time.Now() // Don't trust the client's timestamp.
 				c.mutations <- mut
 			}
 		}
@@ -131,7 +132,7 @@ func (c *wsConn) Send(mut *Mutation) error {
 	res := make(chan error)
 	msg := &wsMessage{
 		t:      websocket.TextMessage,
-		p:      []byte(mut.String()),
+		p:      []byte(mut.String(true)),
 		result: res,
 	}
 

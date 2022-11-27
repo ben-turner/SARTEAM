@@ -42,7 +42,7 @@ func (s *ConnSet) Broadcast(mutation *Mutation) {
 	defer s.lock.RUnlock()
 
 	for conn := range s.values {
-		conn.Send(mutation)
+		go conn.Send(mutation)
 	}
 }
 

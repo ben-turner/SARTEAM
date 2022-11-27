@@ -68,11 +68,12 @@ func TestIOConnSend(t *testing.T) {
 	conn := NewIOConn(rwc, "test name")
 
 	mut := &Mutation{
+		ClientID:  "67890",
 		ID:        "1",
 		Timestamp: time.Date(2022, 11, 7, 14, 5, 10, 0, time.UTC),
 		Action:    MutationActionCreate,
 		Path:      []string{"foo", "bar"},
-		body:      []byte("{}"),
+		Body:      []byte("{}"),
 	}
 
 	conn.Send(mut)
@@ -86,6 +87,7 @@ func TestIOConnSend(t *testing.T) {
 
 	testErr := errors.New("test error")
 	rwc.nextErr = testErr
+	mut.ID = "2" // Duplicates fail silently
 
 	err := conn.Send(mut)
 
@@ -124,7 +126,7 @@ func TestIOConnReceive(t *testing.T) {
 				Timestamp: time.Date(2022, 11, 7, 14, 5, 10, 0, time.UTC),
 				Action:    MutationActionCreate,
 				Path:      []string{"foo", "bar"},
-				body:      []byte("{}"),
+				Body:      []byte("{}"),
 			},
 		},
 		{
@@ -138,7 +140,7 @@ func TestIOConnReceive(t *testing.T) {
 				Timestamp: time.Date(2022, 11, 7, 14, 5, 10, 0, time.UTC),
 				Action:    MutationActionUpdate,
 				Path:      []string{"foo", "bar"},
-				body:      []byte("{\"foo\": \"bar\"}"),
+				Body:      []byte("{\"foo\": \"bar\"}"),
 			},
 		},
 		{
@@ -226,8 +228,11 @@ func TestIOConnDuplicates(t *testing.T) {
 	if mut == nil {
 		t.Fatal("expected mutation, got nil")
 	}
-	if mut.ID != "1" {
+	if mut.ClientID != "1" {
 		t.Fatalf("expected mutation ID 1, got %v", mut.ID)
+	}
+	if mut.ID != "foobar" {
+		t.Fatalf("expected mutation ID foobar, got %v", mut.ID)
 	}
 	if mut.Action != MutationActionCreate {
 		t.Fatalf("expected mutation action CREATE, got %v", mut.Action)
@@ -240,8 +245,11 @@ func TestIOConnDuplicates(t *testing.T) {
 	if mut == nil {
 		t.Fatal("expected mutation, got nil")
 	}
-	if mut.ID != "3" {
+	if mut.ClientID != "3" {
 		t.Fatalf("expected mutation ID 3, got %v", mut.ID)
+	}
+	if mut.ID != "notadupe" {
+		t.Fatalf("expected mutation ID notadupe, got %v", mut.ID)
 	}
 	if mut.Action != MutationActionUpdate {
 		t.Fatalf("expected mutation action UPDATE, got %v", mut.Action)
@@ -252,7 +260,7 @@ func TestIOConnDuplicates(t *testing.T) {
 		Timestamp: time.Date(2022, 11, 7, 14, 5, 10, 0, time.UTC),
 		Action:    MutationActionCreate,
 		Path:      []string{"foo", "bar"},
-		body:      []byte("{}"),
+		Body:      []byte("{}"),
 	})
 	rwc.Write([]byte("2022-01-01T00:00:00Z another DELETE foo/bar {}\n"))
 
@@ -263,8 +271,11 @@ func TestIOConnDuplicates(t *testing.T) {
 	if mut == nil {
 		t.Fatal("expected mutation, got nil")
 	}
-	if mut.ID != "5" {
+	if mut.ClientID != "5" {
 		t.Fatalf("expected mutation ID 5, got %v", mut.ID)
+	}
+	if mut.ID != "another" {
+		t.Fatalf("expected mutation ID another, got %v", mut.ID)
 	}
 	if mut.Action != MutationActionDelete {
 		t.Fatalf("expected mutation action DELETE, got %v", mut.Action)
